@@ -1,0 +1,263 @@
+import { useEffect, useRef, useState, useCallback } from "react";
+
+const PALETTES = [
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=i/m;return[~~(9*(1-v)*v*v*v*255),~~(15*(1-v)**2*v*v*255),~~(8.5*(1-v)**3*v*255),255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=i/m;return[~~(255*Math.min(1,v*3)),~~(255*Math.max(0,v*3-1)),~~(255*Math.max(0,v*3-2)),255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=~~(255*(i%64)/64);return[v,v,v,255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const s=i/m*12;return[~~((Math.sin(s*1.3)*.5+.5)*255),~~((Math.sin(s*.7+2)*.5+.5)*255),~~((Math.sin(s*1.9+4)*.5+.5)*255),255]},
+  (i,m)=>{if(i===m)return[0,4,10,255];const v=i/m;return[~~(v*30),~~(v*120+Math.sin(v*20)*30),~~(v*220),255]},
+];
+const PNAMES=["OCEAN","FIRE","MONO","PSYCHO","DEEP SEA"];
+
+function sck(n,v){const e=new Date();e.setTime(e.getTime()+365*864e5);document.cookie=`${n}=${encodeURIComponent(v)};expires=${e.toUTCString()};path=/;SameSite=Lax`}
+function gck(n){const c=document.cookie.split(';').find(c=>c.trim().startsWith(n+'='));return c?decodeURIComponent(c.trim().slice(n.length+1)):null}
+
+function mand(cx,cy,max){let zx=0,zy=0,i=0;for(;i<max;i++){const x2=zx*zx,y2=zy*zy;if(x2+y2>4)return i+1-Math.log(Math.log(x2+y2)/2)/Math.LN2;zy=2*zx*zy+cy;zx=x2-y2+cx}return max}
+
+export default function JoeMandelbrot() {
+  const cvs = useRef(null);
+  const st = useRef({ cx: -0.5, cy: 0, zoom: 200, maxIter: 256, pal: 0 });
+  const rgen = useRef(0);
+  const rtimer = useRef(null);
+  const dragRef = useRef(null);
+  const wheelRef = useRef({ acc: 0, ox: 0, oy: 0, raf: null });
+  const pinchRef = useRef(null);
+  const touchPanRef = useRef(null);
+
+  const [coords, setCoords] = useState({ x: 0, y: 0 });
+  const [palIdx, setPalIdx] = useState(0);
+  const [maxIter, setMaxIter] = useState(256);
+  const [zoom, setZoom] = useState(200);
+  const [loading, setLoading] = useState(true);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const [cookieOk, setCookieOk] = useState(!!gck('jmb_ok'));
+  const [restored, setRestored] = useState(false);
+
+  const s2c = useCallback((sx, sy) => {
+    const c = cvs.current; if (!c) return { x: 0, y: 0 };
+    const W = c.width, H = c.height;
+    return { x: st.current.cx + (sx - W/2) / st.current.zoom, y: st.current.cy + (sy - H/2) / st.current.zoom };
+  }, []);
+
+  const updateHUD = useCallback((mx, my) => {
+    const c = cvs.current; if (!c) return;
+    const W = c.width, H = c.height;
+    const { x, y } = s2c(mx ?? W/2, my ?? H/2);
+    setCoords({ x, y });
+    setZoom(st.current.zoom);
+    setMaxIter(st.current.maxIter);
+  }, [s2c]);
+
+  const sched = useCallback((d = 0) => {
+    if (rtimer.current) clearTimeout(rtimer.current);
+    rtimer.current = setTimeout(() => doRender(), d);
+  }, []);
+
+  const doRender = useCallback(() => {
+    const c = cvs.current; if (!c) return;
+    const W = c.width, H = c.height;
+    const ctx = c.getContext('2d');
+    const g = ++rgen.current;
+    setLoading(true);
+    const { cx, cy, zoom, maxIter, pal } = st.current;
+    const cf = PALETTES[pal];
+    const img = ctx.createImageData(W, H), d = img.data;
+    const T = 64, txn = Math.ceil(W/T), tyn = Math.ceil(H/T);
+    let tx = 0, ty = 0;
+    function tile() {
+      if (g !== rgen.current) return;
+      const x0=tx*T,y0=ty*T,x1=Math.min(x0+T,W),y1=Math.min(y0+T,H);
+      for (let py=y0;py<y1;py++) for (let px=x0;px<x1;px++) {
+        const re=cx+(px-W/2)/zoom, im=cy+(py-H/2)/zoom;
+        const it=mand(re,im,maxIter);
+        const [r,g2,b,a]=cf(it>=maxIter?maxIter:it,maxIter);
+        const i=(py*W+px)*4; d[i]=r;d[i+1]=g2;d[i+2]=b;d[i+3]=a;
+      }
+      tx++; if(tx>=txn){tx=0;ty++}
+      ctx.putImageData(img,0,0);
+      if (ty<tyn) requestAnimationFrame(tile); else setLoading(false);
+    }
+    requestAnimationFrame(tile);
+  }, []);
+
+  const zAt = useCallback((f, ox, oy) => {
+    const c = cvs.current; if (!c) return;
+    const W = c.width, H = c.height;
+    const bx = st.current.cx + (ox - W/2)/st.current.zoom;
+    const by = st.current.cy + (oy - H/2)/st.current.zoom;
+    st.current.zoom *= f;
+    st.current.cx = bx - (ox - W/2)/st.current.zoom;
+    st.current.cy = by - (oy - H/2)/st.current.zoom;
+    updateHUD(ox, oy);
+    sched(60);
+  }, [updateHUD, sched]);
+
+  // Init
+  useEffect(() => {
+    const c = cvs.current; if (!c) return;
+    const resize = () => { c.width = window.innerWidth; c.height = window.innerHeight; sched(); };
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Load cookies
+    const cx=gck('jmb_cx'),cy=gck('jmb_cy'),z=gck('jmb_zoom');
+    if(cx&&cy&&z){
+      st.current.cx=+cx; st.current.cy=+cy; st.current.zoom=+z;
+      st.current.maxIter=+(gck('jmb_iter')||256);
+      st.current.pal=+(gck('jmb_pal')||0);
+      setPalIdx(st.current.pal); setMaxIter(st.current.maxIter);
+      setRestored(true); setTimeout(()=>setRestored(false), 2800);
+    }
+    updateHUD(); sched();
+    return () => window.removeEventListener('resize', resize);
+  }, [sched, updateHUD]);
+
+  // Wheel
+  useEffect(() => {
+    const c = cvs.current; if (!c) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      let d = e.deltaY;
+      if(e.deltaMode===1)d*=32; if(e.deltaMode===2)d*=800;
+      const wr = wheelRef.current;
+      wr.acc += d; wr.ox = e.clientX; wr.oy = e.clientY;
+      if (!wr.raf) wr.raf = requestAnimationFrame(wani);
+    };
+    const wani = () => {
+      const wr = wheelRef.current;
+      if (Math.abs(wr.acc) < 0.5) { wr.raf = null; wr.acc = 0; return; }
+      const s = wr.acc * 0.08; wr.acc -= s;
+      zAt(Math.exp(-s * 0.004), wr.ox, wr.oy);
+      wr.raf = requestAnimationFrame(wani);
+    };
+    c.addEventListener('wheel', onWheel, { passive: false });
+    return () => c.removeEventListener('wheel', onWheel);
+  }, [zAt]);
+
+  // Keyboard
+  useEffect(() => {
+    const onKey = (e) => {
+      const s = 200 / st.current.zoom;
+      if(e.key==='ArrowLeft')st.current.cx-=s;
+      else if(e.key==='ArrowRight')st.current.cx+=s;
+      else if(e.key==='ArrowUp')st.current.cy-=s;
+      else if(e.key==='ArrowDown')st.current.cy+=s;
+      else if(e.key==='+'||e.key==='='){const c=cvs.current;zAt(2,c.width/2,c.height/2);}
+      else if(e.key==='-'){const c=cvs.current;zAt(0.5,c.width/2,c.height/2);}
+      else return;
+      updateHUD(); sched();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zAt, updateHUD, sched]);
+
+  const onMouseDown = (e) => {
+    if (e.button) return;
+    dragRef.current = { sx: e.clientX, sy: e.clientY, cx: st.current.cx, cy: st.current.cy };
+  };
+  const onMouseMove = (e) => {
+    if (dragRef.current) {
+      const d = dragRef.current;
+      st.current.cx = d.cx - (e.clientX - d.sx)/st.current.zoom;
+      st.current.cy = d.cy - (e.clientY - d.sy)/st.current.zoom;
+      updateHUD(e.clientX, e.clientY); sched(80);
+    } else updateHUD(e.clientX, e.clientY);
+  };
+  const onMouseUp = () => { dragRef.current = null; };
+  const onDblClick = (e) => zAt(2.5, e.clientX, e.clientY);
+
+  const onTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      pinchRef.current = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      touchPanRef.current = null;
+    } else if (e.touches.length === 1) {
+      touchPanRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, cx: st.current.cx, cy: st.current.cy };
+    }
+  };
+  const onTouchMove = (e) => {
+    if (e.touches.length === 2 && pinchRef.current != null) {
+      const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      const mx=(e.touches[0].clientX+e.touches[1].clientX)/2, my=(e.touches[0].clientY+e.touches[1].clientY)/2;
+      zAt(d/pinchRef.current, mx, my); pinchRef.current = d;
+    } else if (e.touches.length === 1 && touchPanRef.current) {
+      const t = touchPanRef.current;
+      st.current.cx = t.cx - (e.touches[0].clientX - t.x)/st.current.zoom;
+      st.current.cy = t.cy - (e.touches[0].clientY - t.y)/st.current.zoom;
+      sched(80);
+    }
+  };
+  const onTouchEnd = () => { pinchRef.current = null; touchPanRef.current = null; };
+
+  const reset = () => { st.current = { cx: -0.5, cy: 0, zoom: 200, maxIter: 256, pal: 0 }; setPalIdx(0); setMaxIter(256); updateHUD(); sched(); };
+  const savePos = () => { const s=st.current; sck('jmb_cx',s.cx);sck('jmb_cy',s.cy);sck('jmb_zoom',s.zoom);sck('jmb_iter',s.maxIter);sck('jmb_pal',s.pal); setSavedMsg(true); setTimeout(()=>setSavedMsg(false),1300); };
+  const cycPal = () => { const p=(st.current.pal+1)%PALETTES.length; st.current.pal=p; setPalIdx(p); sched(); };
+  const moreDetail = () => { st.current.maxIter=Math.min(st.current.maxIter*2,4096); setMaxIter(st.current.maxIter); sched(); };
+  const acceptCookie = () => { sck('jmb_ok','1'); setCookieOk(true); };
+
+  const mono = "'Share Tech Mono', monospace";
+  const bebas = "'Bebas Neue', sans-serif";
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'#000', overflow:'hidden', fontFamily: mono }}>
+      <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Bebas+Neue&display=swap" rel="stylesheet"/>
+
+      <canvas ref={cvs} style={{ display:'block', position:'fixed', top:0, left:0, cursor: dragRef.current ? 'grabbing':'crosshair' }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+        onDoubleClick={onDblClick}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+      />
+
+      {/* HUD */}
+      <div style={{ position:'fixed', top:0, left:0, right:0, display:'flex', justifyContent:'space-between', alignItems:'flex-start', padding:'18px 24px', pointerEvents:'none', zIndex:10 }}>
+        <div>
+          <div style={{ fontFamily: bebas, fontSize:'2.4rem', letterSpacing:'.08em', color:'rgba(255,255,255,.92)', textShadow:'0 0 24px rgba(80,200,255,.6),0 0 2px #fff', lineHeight:1 }}>joeMandelbrot</div>
+          <div style={{ fontSize:'.62rem', color:'rgba(80,200,255,.7)', letterSpacing:'.22em', textTransform:'uppercase', marginTop:4 }}>∞ fractal explorer</div>
+        </div>
+        <div style={{ textAlign:'right', fontSize:'.68rem', color:'rgba(80,220,255,.75)', lineHeight:1.7 }}>
+          <div>RE: {coords.x.toFixed(10)}</div>
+          <div>IM: {coords.y.toFixed(10)}</div>
+          <div>ZOOM: {(zoom/200).toExponential(2)}×</div>
+          <div>ITER: {maxIter}</div>
+        </div>
+      </div>
+
+      {/* Loading */}
+      {loading && <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', color:'rgba(80,200,255,.5)', fontSize:'.7rem', letterSpacing:'.2em', pointerEvents:'none', zIndex:5 }}>RENDERING…</div>}
+
+      {/* Restored toast */}
+      {restored && <div style={{ position:'fixed', top:80, left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,.75)', border:'1px solid rgba(80,200,255,.4)', color:'rgba(80,200,255,.85)', fontSize:'.62rem', letterSpacing:'.12em', padding:'6px 16px', zIndex:20, pointerEvents:'none', backdropFilter:'blur(6px)', whiteSpace:'nowrap' }}>📍 POSITION RESTORED FROM COOKIE</div>}
+
+      {/* Zoom buttons */}
+      <div style={{ position:'fixed', right:24, top:'50%', transform:'translateY(-50%)', display:'flex', flexDirection:'column', gap:6, zIndex:10 }}>
+        {['+','−'].map((lbl, i) => (
+          <div key={lbl} onClick={()=>{ const c=cvs.current; zAt(i===0?2.5:0.4,c.width/2,c.height/2); }}
+            style={{ width:36,height:36,background:'rgba(0,0,0,.6)',border:'1px solid rgba(80,200,255,.35)',color:'rgba(80,200,255,.85)',fontSize:'1.3rem',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',backdropFilter:'blur(6px)',userSelect:'none' }}>
+            {lbl}
+          </div>
+        ))}
+      </div>
+
+      {/* Controls */}
+      <div style={{ position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)', display:'flex', gap:10, zIndex:10 }}>
+        {[
+          ['RESET VIEW', reset],
+          [savedMsg ? 'SAVED ✓' : 'SAVE POSITION', savePos],
+          [`PALETTE: ${PNAMES[palIdx]}`, cycPal],
+          [`DETAIL + (${maxIter})`, moreDetail],
+        ].map(([label, fn]) => (
+          <button key={label} onClick={fn} style={{ background:'rgba(0,0,0,.6)', border:'1px solid rgba(80,200,255,.4)', color:'rgba(80,200,255,.85)', fontFamily:mono, fontSize:'.7rem', letterSpacing:'.1em', padding:'7px 16px', cursor:'pointer', backdropFilter:'blur(6px)' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Cookie notice */}
+      {!cookieOk && (
+        <div style={{ position:'fixed', bottom:70, left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,.82)', border:'1px solid rgba(80,200,255,.4)', color:'rgba(80,200,255,.8)', fontSize:'.62rem', letterSpacing:'.1em', padding:'8px 18px', backdropFilter:'blur(8px)', zIndex:20, display:'flex', gap:14, alignItems:'center', whiteSpace:'nowrap' }}>
+          <span style={{ color:'rgba(255,255,255,.7)' }}>🍪 joeMandelbrot uses cookies to remember your fractal position.</span>
+          <button onClick={acceptCookie} style={{ background:'rgba(80,200,255,.18)', border:'1px solid rgba(80,200,255,.6)', color:'#fff', fontFamily:mono, fontSize:'.62rem', letterSpacing:'.1em', padding:'3px 12px', cursor:'pointer' }}>GOT IT</button>
+        </div>
+      )}
+    </div>
+  );
+}
