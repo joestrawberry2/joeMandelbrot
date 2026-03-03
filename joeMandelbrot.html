@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>joeMandelbrot</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Bebas+Neue&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;font-family:'Share Tech Mono',monospace;cursor:crosshair}
+#c{display:block;position:fixed;top:0;left:0}
+#hud{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:18px 24px;pointer-events:none;z-index:10}
+#title{font-family:'Bebas Neue',sans-serif;font-size:2.4rem;letter-spacing:.08em;color:rgba(255,255,255,.92);text-shadow:0 0 24px rgba(80,200,255,.6),0 0 2px #fff;line-height:1}
+#sub{font-size:.62rem;color:rgba(80,200,255,.7);letter-spacing:.22em;text-transform:uppercase;margin-top:4px}
+#coords{text-align:right;font-size:.68rem;color:rgba(80,220,255,.75);line-height:1.7}
+#ctls{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:10}
+.btn{background:rgba(0,0,0,.6);border:1px solid rgba(80,200,255,.4);color:rgba(80,200,255,.85);font-family:'Share Tech Mono',monospace;font-size:.7rem;letter-spacing:.1em;padding:7px 16px;cursor:pointer;transition:all .18s;backdrop-filter:blur(6px)}
+.btn:hover{background:rgba(80,200,255,.15);border-color:rgba(80,200,255,.85);color:#fff;box-shadow:0 0 14px rgba(80,200,255,.3)}
+#zbar{position:fixed;right:24px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;z-index:10}
+.zbtn{width:36px;height:36px;background:rgba(0,0,0,.6);border:1px solid rgba(80,200,255,.35);color:rgba(80,200,255,.85);font-size:1.3rem;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .18s;backdrop-filter:blur(6px);user-select:none}
+.zbtn:hover{background:rgba(80,200,255,.15);border-color:rgba(80,200,255,.85);color:#fff}
+#ckn{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.82);border:1px solid rgba(80,200,255,.4);color:rgba(80,200,255,.8);font-size:.62rem;letter-spacing:.1em;padding:8px 18px;backdrop-filter:blur(8px);z-index:20;display:flex;gap:14px;align-items:center;white-space:nowrap}
+#cka{background:rgba(80,200,255,.18);border:1px solid rgba(80,200,255,.6);color:#fff;font-family:'Share Tech Mono',monospace;font-size:.62rem;padding:3px 12px;cursor:pointer}
+#ld{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:rgba(80,200,255,.5);font-size:.7rem;letter-spacing:.2em;pointer-events:none;z-index:5;transition:opacity .4s}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div><div id="title">joeMandelbrot</div><div id="sub">&#8734; fractal explorer</div></div>
+  <div id="coords"><div id="cx">RE: —</div><div id="cy">IM: —</div><div id="cz">ZOOM: 1×</div><div id="ci">ITER: —</div></div>
+</div>
+<div id="zbar"><div class="zbtn" id="zi">+</div><div class="zbtn" id="zo">−</div></div>
+<div id="ctls">
+  <button class="btn" id="breset">RESET VIEW</button>
+  <button class="btn" id="bsave">SAVE POSITION</button>
+  <button class="btn" id="bpal">PALETTE</button>
+  <button class="btn" id="biter">DETAIL +</button>
+</div>
+<div id="ld">RENDERING…</div>
+<div id="ckn" style="display:none"><span>🍪 joeMandelbrot uses cookies to remember your fractal position.</span><button id="cka">GOT IT</button></div>
+<script>
+function sck(n,v,d=365){const e=new Date();e.setTime(e.getTime()+d*864e5);document.cookie=`${n}=${encodeURIComponent(v)};expires=${e.toUTCString()};path=/;SameSite=Lax`}
+function gck(n){const c=document.cookie.split(';').find(c=>c.trim().startsWith(n+'='));return c?decodeURIComponent(c.trim().slice(n.length+1)):null}
+const ckn=document.getElementById('ckn');
+if(!gck('jmb_ok'))ckn.style.display='flex';
+document.getElementById('cka').onclick=()=>{sck('jmb_ok','1');ckn.style.display='none'};
+
+const st={cx:-0.5,cy:0,zoom:200,maxIter:256,pal:0};
+const PALS=[
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=i/m;return[~~(9*(1-v)*v*v*v*255),~~(15*(1-v)**2*v*v*255),~~(8.5*(1-v)**3*v*255),255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=i/m;return[~~(255*Math.min(1,v*3)),~~(255*Math.max(0,v*3-1)),~~(255*Math.max(0,v*3-2)),255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const v=~~(255*(i%64)/64);return[v,v,v,255]},
+  (i,m)=>{if(i===m)return[0,0,0,255];const s=i/m*12;return[~~((Math.sin(s*1.3)*0.5+0.5)*255),~~((Math.sin(s*.7+2)*.5+.5)*255),~~((Math.sin(s*1.9+4)*.5+.5)*255),255]},
+  (i,m)=>{if(i===m)return[0,4,10,255];const v=i/m;return[~~(v*30),~~(v*120+Math.sin(v*20)*30),~~(v*220),255]},
+];
+const PNAMES=['OCEAN','FIRE','MONO','PSYCHO','DEEP SEA'];
+
+function savePos(){sck('jmb_cx',st.cx);sck('jmb_cy',st.cy);sck('jmb_zoom',st.zoom);sck('jmb_iter',st.maxIter);sck('jmb_pal',st.pal)}
+function loadPos(){const cx=gck('jmb_cx'),cy=gck('jmb_cy'),z=gck('jmb_zoom');if(cx&&cy&&z){st.cx=+cx;st.cy=+cy;st.zoom=+z;st.maxIter=+(gck('jmb_iter')||256);st.pal=+(gck('jmb_pal')||0);return true}return false}
+
+const cvs=document.getElementById('c'),ctx=cvs.getContext('2d');
+let W,H;
+function rsz(){W=cvs.width=innerWidth;H=cvs.height=innerHeight}
+rsz();addEventListener('resize',()=>{rsz();sched()});
+
+function s2c(sx,sy){return{x:st.cx+(sx-W/2)/st.zoom,y:st.cy+(sy-H/2)/st.zoom}}
+function mand(cx,cy,max){let zx=0,zy=0,i=0;for(;i<max;i++){const x2=zx*zx,y2=zy*zy;if(x2+y2>4)return i+1-Math.log(Math.log(x2+y2)/2)/Math.LN2;zy=2*zx*zy+cy;zx=x2-y2+cx}return max}
+
+const ldEl=document.getElementById('ld');
+let rtimer=null,rgen=0;
+function sched(d=0){if(rtimer)clearTimeout(rtimer);rtimer=setTimeout(doRender,d)}
+
+function doRender(){
+  const g=++rgen;ldEl.style.opacity='1';
+  const{cx,cy,zoom,maxIter,pal}=st,cf=PALS[pal];
+  const img=ctx.createImageData(W,H),d=img.data;
+  const T=64,txn=Math.ceil(W/T),tyn=Math.ceil(H/T);
+  let tx=0,ty=0;
+  function tile(){
+    if(g!==rgen)return;
+    const x0=tx*T,y0=ty*T,x1=Math.min(x0+T,W),y1=Math.min(y0+T,H);
+    for(let py=y0;py<y1;py++)for(let px=x0;px<x1;px++){
+      const re=cx+(px-W/2)/zoom,im=cy+(py-H/2)/zoom;
+      const it=mand(re,im,maxIter);
+      const[r,g2,b,a]=cf(it>=maxIter?maxIter:it,maxIter);
+      const i=(py*W+px)*4;d[i]=r;d[i+1]=g2;d[i+2]=b;d[i+3]=a;
+    }
+    tx++;if(tx>=txn){tx=0;ty++}
+    ctx.putImageData(img,0,0);
+    ty<tyn?requestAnimationFrame(tile):ldEl.style.opacity='0';
+  }
+  requestAnimationFrame(tile);
+}
+
+function upd(mx,my){const{x,y}=s2c(mx??W/2,my??H/2);document.getElementById('cx').textContent=`RE: ${x.toFixed(10)}`;document.getElementById('cy').textContent=`IM: ${y.toFixed(10)}`;document.getElementById('cz').textContent=`ZOOM: ${(st.zoom/200).toExponential(2)}×`;document.getElementById('ci').textContent=`ITER: ${st.maxIter}`}
+
+function zAt(f,ox,oy){const{x:bx,y:by}=s2c(ox,oy);st.zoom*=f;st.cx=bx-(ox-W/2)/st.zoom;st.cy=by-(oy-H/2)/st.zoom;upd(ox,oy);sched(60)}
+
+let wacc=0,wox=0,woy=0,wraf=null;
+cvs.addEventListener('wheel',e=>{e.preventDefault();let d=e.deltaY;if(e.deltaMode===1)d*=32;if(e.deltaMode===2)d*=800;wacc+=d;wox=e.clientX;woy=e.clientY;if(!wraf)wraf=requestAnimationFrame(wani)},{passive:false});
+function wani(){if(Math.abs(wacc)<0.5){wraf=null;wacc=0;return}const s=wacc*0.08;wacc-=s;zAt(Math.exp(-s*0.004),wox,woy);wraf=requestAnimationFrame(wani)}
+
+let lpd=null;
+cvs.addEventListener('touchstart',e=>{if(e.touches.length===2)lpd=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY)},{passive:true});
+cvs.addEventListener('touchmove',e=>{if(e.touches.length===2&&lpd){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY),mx=(e.touches[0].clientX+e.touches[1].clientX)/2,my=(e.touches[0].clientY+e.touches[1].clientY)/2;zAt(d/lpd,mx,my);lpd=d}},{passive:true});
+cvs.addEventListener('touchend',()=>lpd=null);
+cvs.addEventListener('dblclick',e=>zAt(2.5,e.clientX,e.clientY));
+
+let drag=false,dsx,dsy,dcx,dcy;
+cvs.addEventListener('mousedown',e=>{if(e.button)return;drag=true;dsx=e.clientX;dsy=e.clientY;dcx=st.cx;dcy=st.cy;cvs.style.cursor='grabbing'});
+addEventListener('mousemove',e=>{if(drag){st.cx=dcx-(e.clientX-dsx)/st.zoom;st.cy=dcy-(e.clientY-dsy)/st.zoom;upd(e.clientX,e.clientY);sched(80)}else upd(e.clientX,e.clientY)});
+addEventListener('mouseup',()=>{if(drag){drag=false;cvs.style.cursor='crosshair'}});
+
+let tps=null,tpc=null;
+cvs.addEventListener('touchstart',e=>{if(e.touches.length===1){tps={x:e.touches[0].clientX,y:e.touches[0].clientY};tpc={cx:st.cx,cy:st.cy}}},{passive:true});
+cvs.addEventListener('touchmove',e=>{if(e.touches.length===1&&tps){st.cx=tpc.cx-(e.touches[0].clientX-tps.x)/st.zoom;st.cy=tpc.cy-(e.touches[0].clientY-tps.y)/st.zoom;sched(80)}},{passive:true});
+cvs.addEventListener('touchend',()=>tps=null);
+
+addEventListener('keydown',e=>{const s=200/st.zoom;if(e.key==='ArrowLeft')st.cx-=s;else if(e.key==='ArrowRight')st.cx+=s;else if(e.key==='ArrowUp')st.cy-=s;else if(e.key==='ArrowDown')st.cy+=s;else if(e.key==='+'||e.key==='=')zAt(2,W/2,H/2);else if(e.key==='-')zAt(0.5,W/2,H/2);else if(e.key==='r')reset();else if(e.key==='s')saveV();else if(e.key==='p')cycPal();upd();sched()});
+
+document.getElementById('zi').onclick=()=>zAt(2.5,W/2,H/2);
+document.getElementById('zo').onclick=()=>zAt(0.4,W/2,H/2);
+function reset(){st.cx=-0.5;st.cy=0;st.zoom=200;st.maxIter=256;upd();sched()}
+function saveV(){savePos();const b=document.getElementById('bsave');b.textContent='SAVED ✓';setTimeout(()=>b.textContent='SAVE POSITION',1200)}
+function cycPal(){st.pal=(st.pal+1)%PALS.length;const b=document.getElementById('bpal');b.textContent=`PALETTE: ${PNAMES[st.pal]}`;setTimeout(()=>b.textContent='PALETTE',1500);sched()}
+document.getElementById('breset').onclick=reset;
+document.getElementById('bsave').onclick=saveV;
+document.getElementById('bpal').onclick=cycPal;
+document.getElementById('biter').onclick=()=>{st.maxIter=Math.min(st.maxIter*2,4096);upd();sched()};
+
+const restored=loadPos();upd();sched();
+if(restored){const n=document.createElement('div');n.style.cssText='position:fixed;top:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);border:1px solid rgba(80,200,255,.4);color:rgba(80,200,255,.85);font-family:monospace;font-size:.62rem;letter-spacing:.12em;padding:6px 16px;z-index:20;pointer-events:none;backdrop-filter:blur(6px);transition:opacity .6s';n.textContent='📍 POSITION RESTORED FROM COOKIE';document.body.appendChild(n);setTimeout(()=>{n.style.opacity='0';setTimeout(()=>n.remove(),700)},2500)}
+</script>
+</body>
+</html>
